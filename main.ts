@@ -1,17 +1,10 @@
 // main.ts
 import { serve } from "https://deno.land/std/http/server.ts";
-import { cors } from "https://deno.land/x/cors/mod.ts";
 
 // 配置
 const CF_ACCOUNT_ID = Deno.env.get("CF_ACCOUNT_ID") || "";
 const CF_API_TOKEN = Deno.env.get("CF_API_TOKEN") || "";
 const PORT = parseInt(Deno.env.get("PORT") || "8000");
-
-// OpenAI 到 Cloudflare 模型映射
-const MODEL_MAPPING: Record<string, string> = {
-  "gpt-3.5-turbo": "@cf/meta/llama-2-7b-chat",
-  "gpt-4": "@cf/meta/llama-3.1-8b-instruct",
-};
 
 interface OpenAIMessage {
   role: string;
@@ -23,12 +16,14 @@ interface OpenAIRequest {
   messages: OpenAIMessage[];
   temperature?: number;
   max_tokens?: number;
+  stream?: boolean;
 }
 
 interface CloudflareRequest {
   prompt: string;
   temperature?: number;
   max_tokens?: number;
+  stream?: boolean;
 }
 
 // 将 OpenAI 格式转换为 Cloudflare 格式
@@ -50,10 +45,11 @@ function convertOpenAIToCF(body: OpenAIRequest): CloudflareRequest {
     prompt,
     temperature: body.temperature,
     max_tokens: body.max_tokens,
+    stream: body.stream
   };
 }
 
-// 构建 Cloudflare API 响应为 OpenAI 格式
+// 构建 OpenAI 格式的响应
 function buildOpenAIResponse(cfResponse: any) {
   return {
     id: crypto.randomUUID(),
@@ -78,32 +74,17 @@ function buildOpenAIResponse(cfResponse: any) {
   };
 }
 
-// 处理请求的主函数
-async function handleRequest(req: Request): Promise<Response> {
-  // 处理 OPTIONS 请求
-  if (req.method === "OPTIONS") {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type, Authorization",
-        "Access-Control-Max-Age": "86400",
-      },
-    });
-  }
-
+// 处理 AI 请求
+async function handleAIRequest(req: Request): Promise<Response> {
   try {
-    if (req.method !== "POST") {
-      return new Response("Method not allowed", { status: 405 });
-    }
-
     const body: OpenAIRequest = await req.json();
-    const cfModel = MODEL_MAPPING[body.model] || "@cf/meta/llama-2-7b-chat";
     const cfBody = convertOpenAIToCF(body);
 
+    // 修正：使用正确的模型格式，移除开头的 @cf/
+    const modelName = body.model.replace('@cf/', '');
+    
     const response = await fetch(
-      `https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/ai/run/${cfModel}`,
+      `https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/ai/run/${modelName}`,
       {
         method: "POST",
         headers: {
@@ -116,6 +97,7 @@ async function handleRequest(req: Request): Promise<Response> {
 
     if (!response.ok) {
       const error = await response.text();
+      console.error("Cloudflare API Response:", error);
       throw new Error(`Cloudflare API error: ${error}`);
     }
 
@@ -130,7 +112,10 @@ async function handleRequest(req: Request): Promise<Response> {
     });
   } catch (error) {
     console.error("Error:", error);
-    return new Response(JSON.stringify({ error: error.message }), {
+    return new Response(JSON.stringify({ 
+      error: error.message,
+      details: "Please check if the model name is correct and ensure you have proper permissions." 
+    }), {
       status: 500,
       headers: {
         "Content-Type": "application/json",
@@ -138,6 +123,32 @@ async function handleRequest(req: Request): Promise<Response> {
       },
     });
   }
+}
+
+// 处理请求的主函数
+async function handleRequest(req: Request): Promise<Response> {
+  const url = new URL(req.url);
+  
+  // 处理 OPTIONS 请求
+  if (req.method === "OPTIONS") {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type, Authorization",
+        "Access-Control-Max-Age": "86400",
+      },
+    });
+  }
+
+  // 只处理 POST 请求
+  if (req.method !== "POST") {
+    return new Response("Method not allowed", { status: 405 });
+  }
+
+  // 处理所有路径的请求
+  return handleAIRequest(req);
 }
 
 // 启动服务器
