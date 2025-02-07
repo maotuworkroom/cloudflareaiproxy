@@ -80,25 +80,24 @@ async function handleAIRequest(req: Request): Promise<Response> {
     const body: OpenAIRequest = await req.json();
     const cfBody = convertOpenAIToCF(body);
 
-    // 修正：使用正确的模型格式，移除开头的 @cf/
-    const modelName = body.model.replace('@cf/', '');
+    // 构建正确的模型路径
+    const cloudflareEndpoint = `https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/ai/run/@cf/deepseek-ai/deepseek-math-7b-instruct`;
     
-    const response = await fetch(
-      `https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/ai/run/${modelName}`,
-      {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${CF_API_TOKEN}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(cfBody),
-      }
-    );
+    console.log("Sending request to:", cloudflareEndpoint);
+    
+    const response = await fetch(cloudflareEndpoint, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${CF_API_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(cfBody),
+    });
 
     if (!response.ok) {
-      const error = await response.text();
-      console.error("Cloudflare API Response:", error);
-      throw new Error(`Cloudflare API error: ${error}`);
+      const errorText = await response.text();
+      console.error("Cloudflare API Response:", errorText);
+      throw new Error(`Cloudflare API error: ${errorText}`);
     }
 
     const cfResponse = await response.json();
@@ -114,7 +113,7 @@ async function handleAIRequest(req: Request): Promise<Response> {
     console.error("Error:", error);
     return new Response(JSON.stringify({ 
       error: error.message,
-      details: "Please check if the model name is correct and ensure you have proper permissions." 
+      details: "An error occurred while processing your request." 
     }), {
       status: 500,
       headers: {
@@ -127,8 +126,6 @@ async function handleAIRequest(req: Request): Promise<Response> {
 
 // 处理请求的主函数
 async function handleRequest(req: Request): Promise<Response> {
-  const url = new URL(req.url);
-  
   // 处理 OPTIONS 请求
   if (req.method === "OPTIONS") {
     return new Response(null, {
@@ -147,7 +144,6 @@ async function handleRequest(req: Request): Promise<Response> {
     return new Response("Method not allowed", { status: 405 });
   }
 
-  // 处理所有路径的请求
   return handleAIRequest(req);
 }
 
